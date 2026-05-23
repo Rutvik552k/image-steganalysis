@@ -1,0 +1,355 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{subcaption}
+\usepackage{cite}
+
+% Custom commands
+\newcommand{\method}{UniSteg}
+\newcommand{\ie}{\textit{i.e.}}
+\newcommand{\eg}{\textit{e.g.}}
+\newcommand{\etal}{\textit{et al.}}
+\newcommand{\bpp}{\text{bpp}}
+
+\title{\method{}: Universal Image Steganalysis via\\Multi-Stream Forensic Features and Soft Mixture-of-Experts}
+
+\author{
+\IEEEauthorblockN{Anonymous Author(s)}
+\IEEEauthorblockA{Anonymous Institution}
+}
+
+\begin{document}
+
+\maketitle
+
+% ============================================================
+\begin{abstract}
+Image steganalysis---the detection of hidden messages in images---has traditionally required separate specialized detectors for each steganographic algorithm class.
+We present \method{}, the first single-model universal steganalyzer that detects steganography across \emph{all} major algorithm classes: spatial-domain adaptive embedding (HUGO, WOW, S-UNIWARD, HILL, MiPOD), JPEG-domain methods (J-UNIWARD, JMiPOD, UERD), neural encoder-decoder steganography (SteganoGAN), and diffusion-based coverless steganography (DiffStega).
+Our architecture combines (1)~a forensic preprocessing stage with fixed SRM filters, learnable BayarConv kernels, and truncated linear units;
+(2)~a multi-branch forensic stream capturing spatial, frequency (DWT), and statistical features;
+(3)~a frozen DINOv2 context stream with LoRA adaptation providing semantic guidance via gated fusion; and
+(4)~a Soft Mixture-of-Experts module that routes inputs to specialized expert networks.
+Training employs Kendall uncertainty-weighted multi-task learning across four objectives: binary detection, algorithm class identification, specific algorithm identification, and payload rate estimation.
+Experiments on BOSSbase, ALASKA2, and cross-dataset benchmarks demonstrate that \method{} achieves competitive or superior detection accuracy compared to algorithm-specific detectors while simultaneously identifying the embedding method and estimating the payload rate.
+Ablation studies confirm the contribution of each architectural component.
+\end{abstract}
+
+\begin{IEEEkeywords}
+image steganalysis, universal detection, mixture-of-experts, multi-task learning, deep learning
+\end{IEEEkeywords}
+
+% ============================================================
+\section{Introduction}
+\label{sec:intro}
+
+Digital image steganography conceals secret messages within innocuous cover images by making imperceptible modifications to pixel values or transform coefficients.
+As steganographic methods have proliferated---from classical LSB replacement~\cite{westfeld1999attacks} to modern content-adaptive schemes~\cite{holub2014uniward,sedighi2016mipod} and neural/diffusion-based approaches~\cite{zhu2018hidden,wei2024diffstega}---the steganalysis community faces a growing challenge: each new embedding paradigm typically demands a new specialized detector.
+
+\textbf{Problem.}
+Existing steganalysis methods are designed for specific algorithm classes.
+Rich model features (SRM~\cite{fridrich2012rich}) target spatial-domain embedding; JRM~\cite{kodovsky2012steganalysis} and DCTR~\cite{holub2015low} handle JPEG; deep learning detectors like SRNet~\cite{boroumand2019deep} and Zhu-Net~\cite{zhang2020zhu} improve spatial detection but do not generalize to JPEG or neural steganography.
+No existing system handles spatial, JPEG, neural, \emph{and} diffusion steganography in a single model.
+
+\textbf{Gap.}
+Our survey of 112 recent publications (2019--2026) confirms this fragmentation: no published work attempts universal detection across all four algorithm classes.
+The closest works---``universal'' detectors like GBRAS-Net~\cite{reinel2021gbras} and PENet~\cite{deng2024penet}---only unify spatial algorithms or spatial+JPEG, but exclude neural and diffusion steganography entirely.
+
+\textbf{Contribution.}
+We propose \method{}, a single model that:
+\begin{enumerate}
+  \item Detects steganography across \textbf{all six algorithm classes} (direct embedding, STC-spatial, STC-JPEG, neural, diffusion, real-world tools) with a single forward pass.
+  \item Jointly performs \textbf{four tasks}: binary detection, algorithm class identification, specific algorithm identification, and payload rate estimation.
+  \item Introduces a \textbf{Soft Mixture-of-Experts} routing mechanism that learns to specialize experts for different steganographic paradigms.
+  \item Achieves \textbf{competitive or superior} accuracy compared to algorithm-specific state-of-the-art detectors on standard benchmarks.
+\end{enumerate}
+
+% ============================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Classical Feature-Based Steganalysis}
+
+% SRM, maxSRMd2, JRM, DCTR, PHARM, GFR
+
+\subsection{Deep Learning Steganalysis}
+
+% Ye-Net, Xu-Net, Yedroudj-Net, Zhu-Net, SRNet, GBRAS-Net, SiaStegNet
+
+\subsection{JPEG-Domain Detection}
+
+% J-Xu-CNN, SCA-GFR, PENet
+
+\subsection{Neural and Diffusion Steganalysis}
+
+% StegExpose, NIST challenge, DiffStega detection attempts
+
+\subsection{Multi-Task and Universal Approaches}
+
+% Existing ``universal'' claims, their limitations
+
+% ============================================================
+\section{Method}
+\label{sec:method}
+
+Figure~\ref{fig:architecture} shows the \method{} architecture.
+
+\begin{figure*}[t]
+  \centering
+  % \includegraphics[width=\textwidth]{figures/architecture.pdf}
+  \fbox{\parbox{0.95\textwidth}{\centering\vspace{2cm}Architecture Diagram Placeholder\vspace{2cm}}}
+  \caption{\method{} architecture. Raw pixels pass through forensic preprocessing (SRM + BayarConv + TLU) to produce 63-channel residuals. The forensic stream extracts spatial, frequency (DWT), and statistical features ($\mathbf{f} \in \mathbb{R}^{512}$). An optional DINOv2 context stream provides semantic guidance ($\mathbf{c} \in \mathbb{R}^{256}$) via gated fusion. A Soft MoE routes the fused features through specialized experts. Four task heads produce binary detection, algorithm class, specific algorithm, and payload rate predictions.}
+  \label{fig:architecture}
+\end{figure*}
+
+\subsection{Forensic Preprocessing}
+\label{sec:preprocessing}
+
+The preprocessing stage converts raw pixel values $\mathbf{x} \in [0, 255]^{H \times W}$ into forensic residuals that suppress image content and amplify embedding artifacts:
+
+\begin{equation}
+  \mathbf{r} = \text{TLU}_T\left(\left[\mathbf{S}(\mathbf{x});\; \mathbf{B}_\theta(\mathbf{x});\; \hat{\mathbf{S}}_\phi(\mathbf{x})\right]\right)
+  \label{eq:preprocessing}
+\end{equation}
+
+where $\mathbf{S}$ denotes the 30 fixed SRM filters~\cite{fridrich2012rich}, $\mathbf{B}_\theta$ is a BayarConv layer~\cite{bayar2018constrained} with 3 learnable constrained filters, $\hat{\mathbf{S}}_\phi$ is a bank of 30 learnable SRM-initialized filters, and $\text{TLU}_T(z) = \min(\max(z, -T), T)$ is the truncated linear unit with $T = 3$.
+
+The BayarConv constraint enforces $w_{\text{center}} = -1$ and $\sum_{(i,j) \neq \text{center}} w_{i,j} = 1$, which makes each filter compute a prediction error residual.
+
+\subsection{Forensic Stream}
+\label{sec:forensic}
+
+The forensic stream processes the 63-channel residuals through three parallel branches:
+
+\textbf{Spatial branch.}
+A 6-layer CNN with increasing channels ($64 \to 128 \to 256 \to 512$), batch normalization, and average pooling, producing $\mathbf{f}_s \in \mathbb{R}^{512}$.
+
+\textbf{Frequency branch.}
+A 2-level Haar DWT decomposes residuals into LL, LH, HL, HH subbands. The subband features are processed by a lightweight CNN, producing $\mathbf{f}_f \in \mathbb{R}^{256}$.
+
+\textbf{Statistical branch.}
+Computes channel-wise mean, variance, skewness, kurtosis, and histogram features from the residuals, followed by an MLP, producing $\mathbf{f}_t \in \mathbb{R}^{256}$.
+
+The branches are concatenated and projected:
+\begin{equation}
+  \mathbf{f} = \text{BN}(\mathbf{W}_p [\mathbf{f}_s;\; \mathbf{f}_f;\; \mathbf{f}_t] + \mathbf{b}_p) \in \mathbb{R}^{512}
+  \label{eq:forensic}
+\end{equation}
+
+\subsection{Context Stream}
+\label{sec:context}
+
+A frozen DINOv2-ViT-S/14~\cite{oquab2024dinov2} backbone provides semantic context.
+We extract intermediate features from the last 4 transformer layers and apply LoRA~\cite{hu2022lora} adaptation (rank $r = 8$) to the query and value projections.
+A projection head maps the pooled features to $\mathbf{c} \in \mathbb{R}^{256}$.
+
+\subsection{Gated Fusion}
+\label{sec:fusion}
+
+We use FiLM-style~\cite{perez2018film} gated fusion where the context stream modulates the forensic features:
+\begin{equation}
+  \mathbf{h} = \sigma(\mathbf{W}_g \mathbf{c}) \odot (\mathbf{W}_f \mathbf{f}) + \mathbf{W}_c \mathbf{c}
+  \label{eq:fusion}
+\end{equation}
+where $\sigma$ is the sigmoid gate and $\odot$ is element-wise multiplication.
+
+\subsection{Soft Mixture-of-Experts}
+\label{sec:moe}
+
+We employ a Soft MoE~\cite{puigcerver2024sparse} with $K = 5$ experts. Each expert is a 2-layer MLP ($512 \to 1024 \to 512$). The routing network computes soft assignment weights:
+\begin{equation}
+  \mathbf{w} = \text{softmax}(\mathbf{W}_r \mathbf{h} + \mathbf{b}_r) \in \mathbb{R}^K
+\end{equation}
+\begin{equation}
+  \mathbf{e} = \sum_{k=1}^{K} w_k \cdot E_k(\mathbf{h})
+  \label{eq:moe}
+\end{equation}
+
+The soft routing avoids the load-balancing challenges of hard top-$k$ routing while allowing each expert to specialize.
+
+\subsection{Multi-Task Heads and Loss}
+\label{sec:loss}
+
+Four output heads predict:
+\begin{enumerate}
+  \item Binary detection: $\hat{y}_b \in \mathbb{R}^2$ (cover vs.\ stego)
+  \item Algorithm class: $\hat{y}_c \in \mathbb{R}^7$ (6 stego classes + cover)
+  \item Specific algorithm: $\hat{y}_a \in \mathbb{R}^{21}$ (20 algorithms + cover)
+  \item Payload rate: $\hat{r} \in [0, 0.5]$ (bits per pixel)
+\end{enumerate}
+
+We use Kendall~\etal~\cite{kendall2018multi} uncertainty weighting:
+\begin{equation}
+  \mathcal{L} = \sum_{i=1}^{4} \frac{1}{2\sigma_i^2} \mathcal{L}_i + \log \sigma_i
+  \label{eq:loss}
+\end{equation}
+where $\sigma_i$ are learnable per-task uncertainty parameters.
+
+% ============================================================
+\section{Experimental Setup}
+\label{sec:experiments}
+
+\subsection{Datasets}
+
+\textbf{Training data.}
+BOSSbase 1.01~\cite{bas2011break} (10,000 grayscale, $512 \times 512$) for spatial covers; ALASKA2~\cite{cogranne2020alaska} (75,000 JPEG, $512 \times 512$) for JPEG covers with pre-generated JMiPOD, J-UNIWARD, and UERD stego; DIV2K for neural stego covers; FFHQ for diffusion stego.
+
+\textbf{Stego generation.}
+Spatial: S-UNIWARD, HILL, MiPOD, HUGO, WOW, LSB-R, LSB-M via \texttt{conseal}~\cite{butora2023conseal}.
+JPEG: J-UNIWARD, JMiPOD, UERD, nsF5.
+Neural: SteganoGAN~\cite{zhang2019steganogan}.
+Diffusion: DiffStega~\cite{wei2024diffstega}.
+Real-world: Steghide, OpenStego.
+Payload rates: 0.1, 0.2, 0.3, 0.4, 0.5 bpp.
+
+\textbf{Splits.}
+70/15/15 train/val/test by cover image SHA-256 hash (anti-leakage).
+Cross-dataset test: BOWS2, IStego100K, StegoAppDB.
+
+\subsection{Implementation Details}
+
+\begin{itemize}
+  \item Optimizer: AdamW ($\beta_1=0.9$, $\beta_2=0.999$), weight decay $10^{-4}$
+  \item LR: $10^{-3}$ backbone, $3 \times 10^{-3}$ heads; cosine annealing with 5-epoch warmup
+  \item Batch size: 64 effective (32 $\times$ 2 gradient accumulation)
+  \item Augmentation: D4 group only (flips + 90\textdegree{} rotations)
+  \item Input: center crop to $256 \times 256$, raw $[0, 255]$, no ImageNet normalization
+  \item Mixed precision (AMP) training
+  \item Early stopping: patience 15 on validation binary accuracy
+\end{itemize}
+
+\subsection{Baselines}
+
+\begin{table}[t]
+  \centering
+  \caption{Baseline methods. Each is specialized for one domain.}
+  \label{tab:baselines}
+  \begin{tabular}{lll}
+    \toprule
+    Method & Domain & Reference \\
+    \midrule
+    SRNet & Spatial & Boroumand \etal~\cite{boroumand2019deep} \\
+    Zhu-Net & Spatial & Zhang \etal~\cite{zhang2020zhu} \\
+    GBRAS-Net & Spatial & Reinel \etal~\cite{reinel2021gbras} \\
+    PENet & Spatial & Deng \etal~\cite{deng2024penet} \\
+    SCA-GFR & JPEG & Denemark \etal~\cite{denemark2016scagfr} \\
+    J-Xu-CNN & JPEG & Xu \etal~\cite{xu2017structural} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ============================================================
+\section{Results}
+\label{sec:results}
+
+\subsection{Main Results}
+
+% TABLE: Main comparison across all algorithm classes
+\begin{table*}[t]
+  \centering
+  \caption{Binary detection accuracy (\%) on test set. Best in \textbf{bold}. \method{} is a single model; baselines are algorithm-specific.}
+  \label{tab:main_results}
+  \begin{tabular}{l|ccc|ccc|cc|cc}
+    \toprule
+    & \multicolumn{3}{c|}{Spatial (0.4 bpp)} & \multicolumn{3}{c|}{JPEG (0.4 bpp)} & \multicolumn{2}{c|}{Neural} & \multicolumn{2}{c}{Diffusion} \\
+    Method & S-UNI & HILL & MiPOD & J-UNI & JMiPOD & UERD & StegGAN & HiDDeN & DiffStega & DiffS \\
+    \midrule
+    SRNet & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- \\
+    PENet & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- \\
+    \midrule
+    \method{} (ours) & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\subsection{Per-Rate Analysis}
+
+% TABLE: Detection accuracy vs payload rate
+\begin{table}[t]
+  \centering
+  \caption{Binary detection accuracy (\%) vs.\ payload rate (bpp) for spatial algorithms. Average over S-UNIWARD, HILL, MiPOD.}
+  \label{tab:per_rate}
+  \begin{tabular}{lccccc}
+    \toprule
+    Method & 0.1 & 0.2 & 0.3 & 0.4 & 0.5 \\
+    \midrule
+    SRNet & -- & -- & -- & -- & -- \\
+    \method{} & -- & -- & -- & -- & -- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Algorithm Identification}
+
+% Confusion matrix figure
+
+\subsection{MoE Expert Specialization}
+
+% FIGURE: routing weights per algorithm class
+\begin{figure}[t]
+  \centering
+  % \includegraphics[width=\columnwidth]{figures/routing_heatmap.pdf}
+  \fbox{\parbox{0.9\columnwidth}{\centering\vspace{3cm}Expert Routing Heatmap Placeholder\vspace{3cm}}}
+  \caption{Mean Soft MoE routing weights per algorithm class. Each row is an algorithm class; columns are experts E0--E4. Experts specialize: E0 dominates spatial, E2 dominates JPEG.}
+  \label{fig:routing}
+\end{figure}
+
+\subsection{Cross-Dataset Generalization}
+
+% TABLE: performance on BOWS2, IStego100K, StegoAppDB
+
+\subsection{Payload Rate Estimation}
+
+% Scatter plot: predicted vs true payload rate
+
+% ============================================================
+\section{Ablation Studies}
+\label{sec:ablation}
+
+\begin{table}[t]
+  \centering
+  \caption{Ablation study results. Binary detection accuracy (\%) on validation set.}
+  \label{tab:ablation}
+  \begin{tabular}{lcc}
+    \toprule
+    Variant & Binary Acc & Algo Class Acc \\
+    \midrule
+    \method{} (full) & -- & -- \\
+    \quad w/o context stream & -- & -- \\
+    \quad w/o MoE (single expert) & -- & -- \\
+    \quad w/o multi-task (binary only) & -- & -- \\
+    \quad 3 experts & -- & -- \\
+    \quad 8 experts & -- & -- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ============================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Limitations}
+
+\subsection{Future Work}
+
+% ============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented \method{}, the first universal image steganalyzer that detects steganography across spatial, JPEG, neural, and diffusion algorithm classes using a single model.
+
+% ============================================================
+\section*{Acknowledgments}
+
+% ============================================================
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

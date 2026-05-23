@@ -1,0 +1,28 @@
+# Ablation: 8 experts instead of 5
+# Tests sensitivity to expert count
+
+model:
+  variant: "lite"
+  num_experts: 8
+  num_algo_classes: 7
+  num_algorithms: 21
+
+data:
+  splits_dir: "data/splits"
+  batch_size: 32
+  target_size: 256
+  apply_srm: false
+  num_workers: 4
+
+training:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  epochs: 100
+  warmup_epochs: 5
+  accumulation_steps: 2
+  max_grad_norm: 1.0
+  patience: 15
+  save_every: 10
+
+output_dir: "checkpoints/ablation_experts_8"
+seed: 42

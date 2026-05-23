@@ -1,0 +1,45 @@
+# UniSteg Training Configuration (hardened)
+
+# Model
+model:
+  variant: "lite"  # "lite" (no DINOv2) or "full"
+  num_experts: 5
+  num_algo_classes: 7
+  num_algorithms: 21
+  tlu_threshold: 3.0
+  # DINOv2 settings (full variant only)
+  dino_model: "dinov2_vits14"
+  lora_rank: 8
+
+# Data
+data:
+  splits_dir: "data/splits"
+  batch_size: 32
+  target_size: 256
+  apply_srm: false  # model does its own SRM+BayarConv+Gabor+Entropy
+  num_workers: 4
+  pin_memory: true
+
+# Training
+training:
+  lr: 1.0e-3
+  min_lr: 1.0e-6              # cosine annealing floor
+  weight_decay: 1.0e-4
+  epochs: 100
+  warmup_epochs: 5
+  accumulation_steps: 2       # effective batch = 32 * 2 = 64
+  max_grad_norm: 1.0
+  patience: 15                # early stopping patience (epochs)
+  plateau_patience: 5         # LR reduction patience (epochs)
+
+  # Checkpoint strategy
+  save_every: 5               # epoch checkpoints every N epochs
+  save_every_steps: 500       # intra-epoch step checkpoints (0=disabled)
+  keep_last_checkpoints: 3    # rotate: keep last N epoch/step checkpoints
+
+# Output
+output_dir: "checkpoints"
+resume_path: null
+tensorboard: true
+log_dir: "runs"
+seed: 42

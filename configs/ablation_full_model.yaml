@@ -1,0 +1,31 @@
+# Full model: UniSteg with DINOv2 context stream
+# Main experiment configuration
+
+model:
+  variant: "full"
+  dino_model: "dinov2_vits14"
+  lora_rank: 8
+  num_experts: 5
+  num_algo_classes: 7
+  num_algorithms: 21
+  tlu_threshold: 3.0
+
+data:
+  splits_dir: "data/splits"
+  batch_size: 16  # smaller batch for full model (DINOv2 uses more VRAM)
+  target_size: 252  # must be multiple of 14 for DINOv2 patches
+  apply_srm: false
+  num_workers: 4
+
+training:
+  lr: 5.0e-4  # lower LR for larger model
+  weight_decay: 1.0e-4
+  epochs: 100
+  warmup_epochs: 5
+  accumulation_steps: 4  # effective batch = 16 * 4 = 64
+  max_grad_norm: 1.0
+  patience: 15
+  save_every: 10
+
+output_dir: "checkpoints/full_model"
+seed: 42

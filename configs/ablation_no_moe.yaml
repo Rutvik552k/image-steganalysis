@@ -1,0 +1,28 @@
+# Ablation: No MoE — replace Soft MoE with identity passthrough
+# Tests whether specialized expert routing helps over a shared backbone
+
+model:
+  variant: "lite"
+  num_experts: 1  # single expert = no routing
+  num_algo_classes: 7
+  num_algorithms: 21
+
+data:
+  splits_dir: "data/splits"
+  batch_size: 32
+  target_size: 256
+  apply_srm: false
+  num_workers: 4
+
+training:
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  epochs: 100
+  warmup_epochs: 5
+  accumulation_steps: 2
+  max_grad_norm: 1.0
+  patience: 15
+  save_every: 10
+
+output_dir: "checkpoints/ablation_no_moe"
+seed: 42

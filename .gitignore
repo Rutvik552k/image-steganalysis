@@ -1,0 +1,54 @@
+# Data (36GB+ — download on training instance directly)
+data/
+*.pgm
+*.ppm
+*.zip
+
+# Model checkpoints and experiments
+experiments/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code local settings
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+wandb/
+runs/
+lightning_logs/
+
+# Session files (local only)
+session_log.md

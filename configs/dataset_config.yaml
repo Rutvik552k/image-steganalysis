@@ -1,0 +1,440 @@
+# Global Steganalysis Dataset Configuration
+# Covers ALL algorithm classes: spatial, JPEG, neural, diffusion
+
+# ============================================================
+# RAW DATASET SOURCES
+# ============================================================
+sources:
+  # --- Spatial Domain Covers ---
+  bossbase:
+    name: "BOSSbase 1.01"
+    url: "http://dde.binghamton.edu/download/ImageDB/BOSSbase_1.01.zip"
+    images: 10000
+    format: "pgm"
+    size: "512x512"
+    color: "grayscale"
+    role: "spatial_cover"
+    local_dir: "data/raw/bossbase"
+
+  bows2:
+    name: "BOWS2"
+    url: "https://data.mendeley.com/datasets/kb3ngxfmjw/1"
+    alt_url: "http://bows2.ec-lille.fr/BOWS2OrigEp3.tgz"
+    images: 10000
+    format: "pgm"
+    size: "512x512"
+    color: "grayscale"
+    role: "spatial_cover_holdout"  # used ONLY for testing
+    local_dir: "data/raw/bows2"
+
+  # --- JPEG Domain Covers + Pre-Generated Stego ---
+  alaska2:
+    name: "ALASKA2"
+    url: "kaggle competitions download alaska2-image-steganalysis"
+    images: 75000  # covers; 300K total with stego
+    format: "jpeg"
+    size: "512x512"
+    color: "color"
+    quality_factors: [75, 90, 95]
+    pre_generated_stego:
+      - "JMiPOD"
+      - "J-UNIWARD"
+      - "UERD"
+    role: "jpeg_primary"
+    local_dir: "data/raw/alaska2"
+
+  # --- Cross-Dataset Test Sets ---
+  istego100k:
+    name: "IStego100K"
+    url: "https://github.com/YangzlTHU/IStego100K"
+    images: 208104
+    format: "jpeg"
+    size: "1024x1024"
+    color: "color"
+    pre_generated_stego:
+      - "J-UNIWARD"
+      - "nsF5"
+      - "UERD"
+    role: "cross_dataset_test"
+    local_dir: "data/raw/istego100k"
+
+  stegoappdb:
+    name: "StegoAppDB"
+    url: "https://forensicstats.org/stegoappdb/"
+    images: 960000
+    format: "jpeg+dng"
+    color: "color"
+    pre_generated_stego:
+      - "PixelKnot (F5)"
+      - "Steganography_M (LSB)"
+      - "Pocket Stego (LSB)"
+      - "Passlok"
+      - "MobiStego"
+      - "Pictograph"
+    payload_type: "real_text"  # actual text messages!
+    role: "real_world_validation"
+    local_dir: "data/raw/stegoappdb"
+
+  lssd:
+    name: "LSSD"
+    url: "https://www.lirmm.fr/~chaumont/LSSD.html"
+    images: 2000000  # up to 2M
+    format: "jpeg"
+    color: "color+grayscale"
+    pre_generated_stego:
+      - "J-UNIWARD"
+      - "nsF5"
+      - "UERD"
+    role: "large_scale_test"
+    local_dir: "data/raw/lssd"
+
+  # --- Generative Model Covers (for diffusion stego) ---
+  ffhq:
+    name: "FFHQ (Flickr-Faces-HQ)"
+    url: "https://github.com/NVlabs/ffhq-dataset"
+    images: 70000
+    format: "png"
+    size: "256x256"  # or 1024x1024
+    color: "color"
+    role: "diffusion_cover"
+    local_dir: "data/raw/ffhq"
+
+  div2k:
+    name: "DIV2K"
+    url: "https://data.vision.ee.ethz.ch/cvl/DIV2K/"
+    images: 1000
+    format: "png"
+    size: "2K"
+    color: "color"
+    role: "neural_stego_cover"
+    local_dir: "data/raw/div2k"
+
+# ============================================================
+# TEXT PAYLOAD CORPORA
+# ============================================================
+text_payloads:
+  english:
+    source: "Project Gutenberg"
+    url: "https://www.gutenberg.org/"
+    description: "Public domain English books"
+    encoding: "utf-8"
+    local_file: "data/raw/text/english_corpus.txt"
+
+  chinese:
+    source: "Wikipedia Chinese dumps"
+    url: "https://dumps.wikimedia.org/zhwiki/"
+    encoding: "utf-8"
+    local_file: "data/raw/text/chinese_corpus.txt"
+
+  multilingual:
+    source: "Wikipedia multilingual"
+    languages: ["en", "zh", "ar", "ru", "ja"]
+    local_dir: "data/raw/text/"
+
+  compressed:
+    description: "gzip-compressed English text"
+    source_corpus: "english"
+    compression: "gzip"
+
+  random:
+    description: "Cryptographically random binary (control group)"
+    generator: "os.urandom()"
+
+# ============================================================
+# STEGO GENERATION CONFIGURATION
+# ============================================================
+generation:
+  # --- Class A: Direct Bit Embedding ---
+  class_a:
+    algorithms:
+      lsb_replacement:
+        tool: "stegano"  # Python library
+        domain: "spatial"
+        covers: "bossbase"
+        format: "png"
+      lsb_matching:
+        tool: "conseal"
+        domain: "spatial"
+        covers: "bossbase"
+        format: "pgm"
+      f5:
+        tool: "f5_java"  # github.com/matthewgao/F5-steganography
+        domain: "jpeg"
+        covers: "alaska2"
+        format: "jpeg"
+      outguess:
+        tool: "outguess"  # CLI tool
+        domain: "jpeg"
+        covers: "alaska2"
+        format: "jpeg"
+      nsf5:
+        tool: "conseal"
+        domain: "jpeg"
+        covers: "alaska2"
+        format: "jpeg"
+
+  # --- Class B: STC + Hand-Crafted Costs (Spatial) ---
+  class_b:
+    algorithms:
+      hugo:
+        tool: "conseal"
+        domain: "spatial"
+        covers: "bossbase"
+      wow:
+        tool: "conseal"
+        domain: "spatial"
+        covers: "bossbase"
+      s_uniward:
+        tool: "conseal"
+        domain: "spatial"
+        covers: "bossbase"
+      hill:
+        tool: "conseal"
+        domain: "spatial"
+        covers: "bossbase"
+      mipod:
+        tool: "conseal"
+        domain: "spatial"
+        covers: "bossbase"
+
+  # --- Class D: JPEG Adaptive ---
+  class_d:
+    algorithms:
+      j_uniward:
+        tool: "conseal"  # also pre-generated in ALASKA2
+        domain: "jpeg"
+        covers: "alaska2"
+        pre_generated: true
+      jmipod:
+        tool: "conseal"  # also pre-generated in ALASKA2
+        domain: "jpeg"
+        covers: "alaska2"
+        pre_generated: true
+      uerd:
+        tool: "conseal"  # also pre-generated in ALASKA2
+        domain: "jpeg"
+        covers: "alaska2"
+        pre_generated: true
+
+  # --- Class E: Neural Encoder-Decoder ---
+  class_e:
+    algorithms:
+      steganogan:
+        tool: "steganogan"  # github.com/DAI-Lab/SteganoGAN
+        domain: "neural"
+        covers: "div2k"
+        format: "png"
+        pretrained: true
+      hidden:
+        tool: "hidden"  # github.com/ando-khachatryan/HiDDeN
+        domain: "neural"
+        covers: "div2k"
+        format: "png"
+
+  # --- Class F: Diffusion Model ---
+  class_f:
+    algorithms:
+      diffstega:
+        tool: "diffstega"  # github.com/evtricks/DiffStega
+        domain: "diffusion"
+        covers: "generated"  # generates from scratch
+        base_model: "stable-diffusion-v1-5"
+      diffusion_stego:
+        tool: "diffusion_stego"  # arxiv.org/abs/2305.18726
+        domain: "diffusion"
+        covers: "generated"
+        base_model: "ddpm"
+
+  # --- Class H: Robust/Real-World ---
+  class_h:
+    algorithms:
+      steghide:
+        tool: "steghide"  # CLI tool
+        domain: "jpeg"
+        covers: "alaska2"
+        format: "jpeg"
+        supports_text: true
+      openstego:
+        tool: "openstego"  # openstego.com
+        domain: "spatial"
+        covers: "bossbase"
+        format: "png"
+        supports_text: true
+
+  # Embedding rates for all STC-based algorithms
+  payload_rates: [0.1, 0.2, 0.3, 0.4, 0.5]  # bpp
+  payload_rate_unit: "bpp"
+
+  # Payload types to generate for each algorithm
+  payload_types:
+    - "english_text"
+    - "random_binary"
+    # Phase 2 additions:
+    # - "chinese_text"
+    # - "compressed_text"
+    # - "multilingual"
+
+# ============================================================
+# DATASET SPLITS
+# ============================================================
+splits:
+  # Train/Val: generated from BOSSbase (spatial) + ALASKA2 (JPEG) + neural/diffusion
+  train:
+    ratio: 0.7
+    sources:
+      spatial: "bossbase"  # images 1-7000
+      jpeg: "alaska2"      # images 1-52500
+      neural: "div2k"      # images 1-700
+      diffusion: "ffhq"    # images 1-49000
+
+  val:
+    ratio: 0.15
+    sources:
+      spatial: "bossbase"  # images 7001-8500
+      jpeg: "alaska2"      # images 52501-63750
+      neural: "div2k"      # images 701-850
+      diffusion: "ffhq"    # images 49001-59500
+
+  test_in_domain:
+    ratio: 0.15
+    sources:
+      spatial: "bossbase"  # images 8501-10000
+      jpeg: "alaska2"      # images 63751-75000
+      neural: "div2k"      # images 851-1000
+      diffusion: "ffhq"    # images 59501-70000
+
+  # Cross-dataset test sets (NEVER seen during training)
+  test_cross_dataset:
+    - name: "bows2_spatial"
+      source: "bows2"
+      algorithms: ["s_uniward", "hill", "mipod"]
+      rates: [0.2, 0.4]
+      description: "Spatial domain cross-source generalization"
+
+    - name: "istego100k_jpeg"
+      source: "istego100k"
+      algorithms: ["j_uniward", "nsf5", "uerd"]
+      description: "JPEG cross-source (social media images)"
+
+    - name: "stegoappdb_real"
+      source: "stegoappdb"
+      algorithms: ["pixelknot_f5", "steganography_m_lsb"]
+      description: "Real-world apps with text payloads"
+
+    - name: "lssd_large"
+      source: "lssd"
+      subset_size: 10000  # sample from 2M
+      algorithms: ["j_uniward", "uerd"]
+      description: "Large-scale generalization"
+
+  # Unseen algorithm test (train on some, test on others)
+  test_unseen_algorithm:
+    held_out_algorithms:
+      - "mipod"       # never seen during training
+      - "outguess"    # never seen during training
+      - "steghide"    # never seen during training
+    description: "Zero-shot generalization to unseen embedding algorithms"
+
+# ============================================================
+# LABEL SCHEMA
+# ============================================================
+labels:
+  # Multi-level hierarchical labels
+  binary: ["cover", "stego"]
+
+  algorithm_class:
+    - "cover"
+    - "class_a_direct"        # LSB-R, LSB-M, F5, OutGuess, nsF5
+    - "class_b_stc_spatial"   # HUGO, WOW, S-UNIWARD, HILL, MiPOD
+    - "class_d_stc_jpeg"      # J-UNIWARD, JMiPOD, UERD
+    - "class_e_neural"        # SteganoGAN, HiDDeN
+    - "class_f_diffusion"     # DiffStega, Diffusion-Stego
+    - "class_h_realworld"     # Steghide, OpenStego
+
+  specific_algorithm:
+    - "cover"
+    - "lsb_replacement"
+    - "lsb_matching"
+    - "f5"
+    - "outguess"
+    - "nsf5"
+    - "hugo"
+    - "wow"
+    - "s_uniward"
+    - "hill"
+    - "mipod"
+    - "j_uniward"
+    - "jmipod"
+    - "uerd"
+    - "steganogan"
+    - "hidden"
+    - "diffstega"
+    - "diffusion_stego"
+    - "steghide"
+    - "openstego"
+
+  payload_rate: "float"  # 0.0 for cover, 0.1-0.5 for stego
+
+  payload_type:
+    - "none"           # cover images
+    - "english_text"
+    - "random_binary"
+    - "chinese_text"
+    - "compressed_text"
+
+# ============================================================
+# PREPROCESSING
+# ============================================================
+preprocessing:
+  spatial:
+    # SRM filter bank (30 filters)
+    srm_filters: true
+    # Resize to standard size
+    target_size: [256, 256]  # or [512, 512] for full resolution
+    # Normalization
+    normalize: "per_channel"  # mean/std per channel
+
+  jpeg:
+    # Extract DCT coefficients alongside spatial
+    extract_dct: true
+    # Quality factor metadata
+    include_qf: true
+    target_size: [256, 256]
+
+  augmentation:
+    # Minimal augmentation — stego artifacts are fragile
+    horizontal_flip: true
+    # NO rotation, NO color jitter, NO random crop (destroys stego signal)
+    rotation: false
+    color_jitter: false
+    random_crop: false
+
+# ============================================================
+# ESTIMATED DATASET SIZES
+# ============================================================
+size_estimates:
+  phase1_minimal:
+    description: "Quick validation of hypothesis"
+    covers: 10000  # BOSSbase
+    algorithms: 3   # S-UNIWARD, HILL, J-UNIWARD
+    rates: 2        # 0.2, 0.4
+    payloads: 2     # text, random
+    total_stego: 120000
+    total_images: 130000
+    estimated_disk: "~25 GB"
+
+  phase2_full:
+    description: "Full global steganalysis training"
+    covers: 85000  # BOSSbase + ALASKA2 covers
+    algorithms: 20  # all classes
+    rates: 5        # 0.1-0.5
+    payloads: 2     # text, random
+    total_stego: 1700000  # not all combos valid
+    total_images: 1785000
+    estimated_disk: "~350 GB"
+
+  phase3_cross_test:
+    description: "Cross-dataset evaluation"
+    sources: ["bows2", "istego100k", "stegoappdb", "lssd"]
+    total_images: 250000
+    estimated_disk: "~50 GB"
