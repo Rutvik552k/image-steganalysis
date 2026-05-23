@@ -2,11 +2,22 @@
 UniSteg Evaluation Metrics Tracker
 """
 
+import numpy as np
 import torch
+import torch.nn.functional as F
+from sklearn.metrics import roc_auc_score
 
 
 class MetricsTracker:
-    """Track and compute steganalysis evaluation metrics per epoch."""
+    """Track and compute steganalysis evaluation metrics per epoch.
+
+    Collects predictions across batches and computes:
+      - Binary accuracy, AUC-ROC
+      - Algorithm class accuracy
+      - Specific algorithm accuracy
+      - Payload RMSE (stego only)
+      - Per-component losses
+    """
 
     def __init__(self):
         self.reset()
@@ -23,12 +34,21 @@ class MetricsTracker:
         self.loss_sums = {}
         self.loss_counts = 0
 
+        # For AUC-ROC: collect all probs and labels
+        self._binary_probs = []
+        self._binary_labels = []
+
     def update(self, predictions: dict, labels: dict, loss_dict: dict):
         B = labels["binary"].shape[0]
 
         pred_binary = predictions["binary"].argmax(dim=1)
         self.binary_correct += (pred_binary == labels["binary"]).sum().item()
         self.binary_total += B
+
+        # Collect softmax probs for AUC-ROC
+        probs = F.softmax(predictions["binary"].detach(), dim=1)[:, 1]
+        self._binary_probs.append(probs.cpu())
+        self._binary_labels.append(labels["binary"].cpu())
 
         pred_ac = predictions["algo_class"].argmax(dim=1)
         self.algo_class_correct += (pred_ac == labels["algorithm_class"]).sum().item()
@@ -57,6 +77,18 @@ class MetricsTracker:
             "algo_acc": self.algo_correct / max(self.algo_total, 1),
             "payload_rmse": (self.payload_mse_sum / max(self.payload_count, 1)) ** 0.5,
         }
+
+        # AUC-ROC
+        if self._binary_probs:
+            all_probs = torch.cat(self._binary_probs).numpy()
+            all_labels = torch.cat(self._binary_labels).numpy()
+            try:
+                metrics["auc_roc"] = roc_auc_score(all_labels, all_probs)
+            except ValueError:
+                metrics["auc_roc"] = 0.0
+        else:
+            metrics["auc_roc"] = 0.0
+
         for k, v in self.loss_sums.items():
             metrics[f"loss/{k}"] = v / max(self.loss_counts, 1)
         return metrics

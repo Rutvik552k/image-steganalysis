@@ -19,6 +19,7 @@ Usage:
     python scripts/train.py --config configs/training_config.yaml
 """
 
+import json
 import math
 import os
 import signal
@@ -243,7 +244,7 @@ def validate(
 
 def format_metrics(metrics: dict, prefix: str = "") -> str:
     parts = []
-    for k in ["binary_acc", "algo_class_acc", "algo_acc", "payload_rmse", "loss/total"]:
+    for k in ["binary_acc", "auc_roc", "algo_class_acc", "algo_acc", "payload_rmse", "loss/total"]:
         if k in metrics:
             v = metrics[k]
             label = k.replace("loss/", "L_")
@@ -362,6 +363,20 @@ def train(
     print(f"  AMP: enabled")
     print()
 
+    # Training history for plotting
+    history = {
+        "epochs": [],
+        "train_loss": [],
+        "val_loss": [],
+        "train_binary_acc": [],
+        "val_binary_acc": [],
+        "val_auc_roc": [],
+        "val_algo_class_acc": [],
+        "val_payload_rmse": [],
+        "lr": [],
+        "grad_norm_avg": [],
+    }
+
     epoch = start_epoch  # ensure epoch is defined for SIGINT handler
 
     for epoch in range(start_epoch, epochs):
@@ -399,6 +414,18 @@ def train(
             print(f"  [WARN] Vanishing gradients: avg_norm={avg_grad_norm:.2e}")
         if max_grad_norm_val > 100:
             print(f"  [WARN] Gradient spike: max_norm={max_grad_norm_val:.2e}")
+
+        # Training history
+        history["epochs"].append(epoch + 1)
+        history["train_loss"].append(train_metrics.get("loss/total", 0.0))
+        history["val_loss"].append(val_metrics.get("loss/total", 0.0))
+        history["train_binary_acc"].append(train_metrics.get("binary_acc", 0.0))
+        history["val_binary_acc"].append(val_metrics.get("binary_acc", 0.0))
+        history["val_auc_roc"].append(val_metrics.get("auc_roc", 0.0))
+        history["val_algo_class_acc"].append(val_metrics.get("algo_class_acc", 0.0))
+        history["val_payload_rmse"].append(val_metrics.get("payload_rmse", 0.0))
+        history["lr"].append(lr_current)
+        history["grad_norm_avg"].append(avg_grad_norm)
 
         if writer:
             for k, v in train_metrics.items():
@@ -453,6 +480,12 @@ def train(
             print(f"\nEarly stopping at epoch {epoch + 1} (no improvement for {patience} epochs)")
             break
 
-    print(f"\nTraining complete. Best binary_acc: {best_val_acc:.4f}")
+    # Save training history for paper plots
+    history_path = os.path.join(output_dir, "training_log.json")
+    with open(history_path, "w") as f:
+        json.dump(history, f, indent=2)
+    print(f"\nTraining log saved to {history_path}")
+
+    print(f"Training complete. Best binary_acc: {best_val_acc:.4f}")
     print(f"Checkpoints in {output_dir}/: best.pt, last.pt")
     return best_val_acc

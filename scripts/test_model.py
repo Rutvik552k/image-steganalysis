@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
+from sklearn.metrics import roc_auc_score, roc_curve, average_precision_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -113,15 +114,46 @@ def compute_overall_metrics(data: dict) -> dict:
     tp = ((binary_pred == 1) & (binary_true == 1)).sum().item()
     fp = ((binary_pred == 1) & (binary_true == 0)).sum().item()
     fn = ((binary_pred == 0) & (binary_true == 1)).sum().item()
+    tn = ((binary_pred == 0) & (binary_true == 0)).sum().item()
     precision = tp / max(tp + fp, 1)
     recall = tp / max(tp + fn, 1)
     f1 = 2 * precision * recall / max(precision + recall, 1e-8)
+    specificity = tn / max(tn + fp, 1)
+
+    # AUC-ROC: use softmax probabilities for stego class
+    binary_probs = F.softmax(data["binary_logits"], dim=1)[:, 1].numpy()
+    binary_true_np = binary_true.numpy()
+    try:
+        auc_roc = roc_auc_score(binary_true_np, binary_probs)
+    except ValueError:
+        auc_roc = 0.0
+
+    # Average Precision (area under PR curve)
+    try:
+        avg_precision = average_precision_score(binary_true_np, binary_probs)
+    except ValueError:
+        avg_precision = 0.0
+
+    # ROC curve points (for plotting)
+    try:
+        fpr, tpr, thresholds = roc_curve(binary_true_np, binary_probs)
+        roc_curve_data = {
+            "fpr": fpr.tolist(),
+            "tpr": tpr.tolist(),
+            "thresholds": thresholds.tolist(),
+        }
+    except ValueError:
+        roc_curve_data = {"fpr": [], "tpr": [], "thresholds": []}
 
     return {
         "binary_acc": binary_acc,
         "binary_precision": precision,
         "binary_recall": recall,
         "binary_f1": f1,
+        "binary_specificity": specificity,
+        "binary_auc_roc": auc_roc,
+        "binary_avg_precision": avg_precision,
+        "roc_curve": roc_curve_data,
         "algo_class_acc": algo_class_acc,
         "algo_acc": algo_acc,
         "payload_rmse": payload_rmse,
@@ -132,9 +164,10 @@ def compute_overall_metrics(data: dict) -> dict:
 
 
 def compute_per_algorithm_metrics(data: dict, label_maps: dict) -> dict:
-    """Compute binary detection accuracy per algorithm."""
+    """Compute binary detection accuracy and AUC-ROC per algorithm."""
     binary_pred = data["binary_logits"].argmax(dim=1)
     binary_true = data["binary"]
+    binary_probs = F.softmax(data["binary_logits"], dim=1)[:, 1]
     algo_id_to_name = {v: k for k, v in label_maps["algorithm"].items()}
 
     results = {}
@@ -144,7 +177,28 @@ def compute_per_algorithm_metrics(data: dict, label_maps: dict) -> dict:
             continue
         acc = (binary_pred[mask] == binary_true[mask]).float().mean().item()
         algo_name = algo_id_to_name.get(algo_id, f"algo_{algo_id}")
-        results[algo_name] = {"binary_acc": acc, "count": mask.sum().item()}
+
+        # Per-algorithm AUC-ROC (need both classes present)
+        y_true = binary_true[mask].numpy()
+        y_prob = binary_probs[mask].numpy()
+        try:
+            auc = roc_auc_score(y_true, y_prob)
+        except ValueError:
+            auc = float("nan")
+
+        # Per-algorithm ROC curve
+        try:
+            fpr, tpr, _ = roc_curve(y_true, y_prob)
+            roc_data = {"fpr": fpr.tolist(), "tpr": tpr.tolist()}
+        except ValueError:
+            roc_data = {"fpr": [], "tpr": []}
+
+        results[algo_name] = {
+            "binary_acc": acc,
+            "auc_roc": auc,
+            "roc_curve": roc_data,
+            "count": mask.sum().item(),
+        }
 
     return results
 
@@ -243,8 +297,11 @@ def print_results(overall, per_algo, per_rate, confusion, routing):
 
     print(f"\n--- Overall ---")
     print(f"  Binary Acc:       {overall['binary_acc']:.4f}")
+    print(f"  Binary AUC-ROC:   {overall['binary_auc_roc']:.4f}")
+    print(f"  Binary Avg Prec:  {overall['binary_avg_precision']:.4f}")
     print(f"  Binary F1:        {overall['binary_f1']:.4f}")
     print(f"  Precision/Recall: {overall['binary_precision']:.4f} / {overall['binary_recall']:.4f}")
+    print(f"  Specificity:      {overall['binary_specificity']:.4f}")
     print(f"  Algo Class Acc:   {overall['algo_class_acc']:.4f}")
     print(f"  Algorithm Acc:    {overall['algo_acc']:.4f}")
     print(f"  Payload RMSE:     {overall['payload_rmse']:.4f}")
@@ -252,7 +309,8 @@ def print_results(overall, per_algo, per_rate, confusion, routing):
 
     print(f"\n--- Per Algorithm (binary detection) ---")
     for algo, m in sorted(per_algo.items()):
-        print(f"  {algo:20s}  acc={m['binary_acc']:.4f}  n={m['count']}")
+        auc_str = f"auc={m['auc_roc']:.4f}" if not np.isnan(m.get('auc_roc', float('nan'))) else "auc=N/A"
+        print(f"  {algo:20s}  acc={m['binary_acc']:.4f}  {auc_str}  n={m['count']}")
 
     print(f"\n--- Per Rate (binary detection) ---")
     for rate, m in sorted(per_rate.items()):
@@ -339,6 +397,18 @@ def main():
         with open(out_path, "w") as f:
             json.dump(results, f, indent=2)
         print(f"\nResults saved to {out_path}")
+
+        # Save payload predictions for scatter plot
+        stego_mask = data["binary"] == 1
+        if stego_mask.any():
+            payload_data = {
+                "true": data["payload_rate_true"][stego_mask].numpy().tolist(),
+                "predicted": data["payload_rate"][stego_mask].numpy().tolist(),
+            }
+            payload_path = os.path.join(args.save_dir, f"payload_predictions.json")
+            with open(payload_path, "w") as f:
+                json.dump(payload_data, f)
+            print(f"Payload predictions saved to {payload_path}")
 
 
 if __name__ == "__main__":
