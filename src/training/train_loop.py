@@ -183,6 +183,11 @@ def train_one_epoch(
             loss, loss_dict = criterion(predictions, labels)
             loss = loss / accumulation_steps
 
+        # NaN guard — skip step if loss is invalid
+        if torch.isnan(loss) or torch.isinf(loss):
+            optimizer.zero_grad(set_to_none=True)
+            continue
+
         scaler.scale(loss).backward()
 
         if (step + 1) % accumulation_steps == 0:

@@ -65,18 +65,31 @@ class UniStegLoss(nn.Module):
             predictions["algorithm"], labels["algorithm"]
         )
 
-        # Task 4: Payload rate regression
+        # Task 4: Payload rate regression (stego images only)
         # Model outputs [0, 1] via sigmoid; scale target from [0, 0.5] to [0, 1]
-        pred_rate = predictions["payload_rate"]
-        target_rate = labels["payload_rate"] / 0.5
-        loss_payload = self.mse_loss(pred_rate, target_rate)
+        # Only compute on stego images — cover images have no meaningful rate
+        stego_mask = labels["binary"] == 1
+        if stego_mask.any():
+            pred_rate = predictions["payload_rate"][stego_mask]
+            target_rate = labels["payload_rate"][stego_mask] / 0.5
+            target_rate = target_rate.clamp(0.0, 1.0)
+            loss_payload = self.mse_loss(pred_rate, target_rate)
+        else:
+            loss_payload = torch.tensor(0.0, device=loss_binary.device)
 
         # Kendall uncertainty weighting:
         # L_total = sum_i [ (1 / (2 * exp(log_var_i))) * L_i + 0.5 * log_var_i ]
         # The 0.5 * log_var term is the regularizer preventing weight collapse.
         losses = torch.stack([loss_binary, loss_algo_class, loss_algorithm, loss_payload])
-        precision = torch.exp(-self.log_var)  # 1 / sigma^2
-        total_loss = (precision * losses + self.log_var).sum() * 0.5
+
+        # Clamp log_var to prevent numerical instability
+        log_var_clamped = self.log_var.clamp(-6.0, 6.0)
+        precision = torch.exp(-log_var_clamped)  # 1 / sigma^2
+        total_loss = (precision * losses + log_var_clamped).sum() * 0.5
+
+        # NaN guard
+        if torch.isnan(total_loss) or torch.isinf(total_loss):
+            total_loss = loss_binary + loss_algo_class + loss_algorithm + loss_payload
 
         # Effective weights for logging (higher precision = higher weight)
         effective_weights = precision.detach()

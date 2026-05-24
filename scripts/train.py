@@ -51,6 +51,8 @@ def main():
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--splits-dir", type=str, default=None)
+    parser.add_argument("--output-dir", type=str, default=None)
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -71,6 +73,10 @@ def main():
         cfg["resume_path"] = args.resume
     if args.lite:
         model_cfg["variant"] = "lite"
+    if args.splits_dir is not None:
+        data_cfg["splits_dir"] = args.splits_dir
+    if args.output_dir is not None:
+        cfg["output_dir"] = args.output_dir
 
     # Seed
     seed = cfg.get("seed", 42)
