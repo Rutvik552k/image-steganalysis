@@ -1,5 +1,5 @@
 # Data (36GB+ — download on training instance directly)
-data/
+/data/
 *.pgm
 *.ppm
 *.zip
