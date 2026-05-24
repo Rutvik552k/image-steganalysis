@@ -27,7 +27,7 @@ training:
   weight_decay: 1.0e-4
   epochs: 100
   warmup_epochs: 5
-  accumulation_steps: 2       # effective batch = 32 * 2 = 64
+  accumulation_steps: 2       # effective batch = 48 * 2 = 96
   max_grad_norm: 1.0
   patience: 15                # early stopping patience (epochs)
   plateau_patience: 5         # LR reduction patience (epochs)

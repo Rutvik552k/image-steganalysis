@@ -238,6 +238,10 @@ def validate(
             predictions = model(images)
             _, loss_dict = criterion(predictions, labels)
 
+        # NaN guard — skip batch if loss is invalid (mirrors train loop)
+        if torch.isnan(loss_dict["total"]) or torch.isinf(loss_dict["total"]):
+            continue
+
         tracker.update(predictions, labels, loss_dict)
 
     return tracker.compute()
@@ -288,6 +292,12 @@ def train(
     """
     os.makedirs(output_dir, exist_ok=True)
 
+    # --- GPU performance optimizations ---
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
     # Hyperparameters
     lr = config.get("lr", 1e-3)
     weight_decay = config.get("weight_decay", 1e-4)
@@ -302,13 +312,14 @@ def train(
     min_lr = config.get("min_lr", 1e-6)
     plateau_patience = config.get("plateau_patience", 5)
 
-    model = model.to(device)
+    model = model.to(device, memory_format=torch.channels_last)
+    model = torch.compile(model, mode="reduce-overhead")
     criterion = UniStegLoss().to(device)
     optimizer = build_optimizer(model, lr, weight_decay)
     scheduler = build_scheduler(
         optimizer, warmup_epochs, epochs, len(train_loader), min_lr,
     )
-    scaler = torch.amp.GradScaler(device.type)
+    scaler = torch.amp.GradScaler(device.type, init_scale=2**12, growth_interval=2000)
     plateau = PlateauReducer(patience=plateau_patience)
 
     # Store base LR for plateau reducer
@@ -366,6 +377,9 @@ def train(
         print(f"  Step checkpoint: every {save_every_steps} steps")
     print(f"  Device: {device}")
     print(f"  AMP: enabled")
+    if device.type == "cuda":
+        print(f"  TF32: enabled | cuDNN benchmark: enabled | channels_last: enabled")
+        print(f"  torch.compile: reduce-overhead")
     print()
 
     # Training history for plotting

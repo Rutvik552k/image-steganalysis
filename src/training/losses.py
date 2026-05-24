@@ -82,10 +82,10 @@ class UniStegLoss(nn.Module):
         # The 0.5 * log_var term is the regularizer preventing weight collapse.
         losses = torch.stack([loss_binary, loss_algo_class, loss_algorithm, loss_payload])
 
-        # Clamp log_var to prevent numerical instability
-        log_var_clamped = self.log_var.clamp(-6.0, 6.0)
+        # Force float32 for exp/precision — these overflow in float16 under AMP
+        log_var_clamped = self.log_var.float().clamp(-6.0, 6.0)
         precision = torch.exp(-log_var_clamped)  # 1 / sigma^2
-        total_loss = (precision * losses + log_var_clamped).sum() * 0.5
+        total_loss = (precision * losses.float() + log_var_clamped).sum() * 0.5
 
         # NaN guard
         if torch.isnan(total_loss) or torch.isinf(total_loss):

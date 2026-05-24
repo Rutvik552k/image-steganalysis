@@ -288,6 +288,7 @@ class SteganalysisDataset(Dataset):
         apply_srm: bool = True,
         augment: bool = False,
         tlu_threshold: float = 3.0,
+        preload: bool = False,
     ):
         self.df = pd.read_csv(csv_path)
         with open(label_maps_path, "r") as f:
@@ -302,6 +303,37 @@ class SteganalysisDataset(Dataset):
         # the model can have its own trainable copy)
         if self.apply_srm:
             self.srm_kernels = torch.from_numpy(build_srm_filters()).float()
+
+        # Preload all images into RAM as uint8 to eliminate disk I/O per step
+        self._cache = None
+        if preload:
+            self._preload_all()
+
+    def _preload_all(self):
+        """Load all images into a single numpy array in RAM.
+
+        Stores as uint8 (1 byte/pixel) to minimize memory:
+          244K images × 256×256 × 1 byte ≈ 16 GB
+        Center crop applied during preload (deterministic).
+        """
+        n = len(self.df)
+        self._cache = np.empty((n, self.target_size, self.target_size), dtype=np.uint8)
+        print(f"  Preloading {n} images into RAM ({n * self.target_size * self.target_size / 1e9:.1f} GB)...")
+        for i in range(n):
+            row = self.df.iloc[i]
+            if row["is_stego"] == 1 and row["stego_path"]:
+                img_path = row["stego_path"]
+            else:
+                img_path = row["cover_path"]
+            img = Image.open(img_path)
+            if img.mode != "L":
+                img = img.convert("L")
+            x = np.array(img, dtype=np.uint8)
+            img.close()
+            self._cache[i] = self._center_crop(x)
+            if (i + 1) % 50000 == 0:
+                print(f"    {i + 1}/{n} loaded...")
+        print(f"  Preload complete: {self._cache.nbytes / 1e9:.1f} GB in RAM")
 
     def __len__(self) -> int:
         return len(self.df)
@@ -334,22 +366,21 @@ class SteganalysisDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         row = self.df.iloc[idx]
 
-        # Determine which image path to use
-        if row["is_stego"] == 1 and row["stego_path"]:
-            img_path = row["stego_path"]
+        if self._cache is not None:
+            # Fast path: read from RAM (no disk I/O, no PNG decode)
+            x = self._cache[idx].astype(np.float32)
+            img_path = row["stego_path"] if (row["is_stego"] == 1 and row["stego_path"]) else row["cover_path"]
         else:
-            img_path = row["cover_path"]
-
-        # Load image as raw pixels [0, 255]
-        # NO normalization — stego signal is at sub-pixel level
-        img = Image.open(img_path)
-        if img.mode != "L":
-            img = img.convert("L")  # grayscale
-
-        x = np.array(img, dtype=np.float32)  # [0, 255] range
-
-        # Center crop (NO resize — interpolation destroys stego)
-        x = self._center_crop(x)
+            # Disk path: load and decode PNG
+            if row["is_stego"] == 1 and row["stego_path"]:
+                img_path = row["stego_path"]
+            else:
+                img_path = row["cover_path"]
+            img = Image.open(img_path)
+            if img.mode != "L":
+                img = img.convert("L")
+            x = np.array(img, dtype=np.float32)
+            x = self._center_crop(x)
 
         # D4 augmentation (safe: preserves exact pixel values)
         if self.augment:
@@ -427,6 +458,7 @@ def create_dataloaders(
         target_size=target_size,
         apply_srm=apply_srm,
         augment=True,  # D4 group augmentation during training
+        preload=True,  # load all train images into RAM (~16 GB)
     )
 
     val_ds = SteganalysisDataset(
@@ -452,6 +484,8 @@ def create_dataloaders(
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=True,
+        persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
     )
 
     val_loader = DataLoader(

@@ -2,6 +2,8 @@
 UniSteg Evaluation Metrics Tracker
 """
 
+import math
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -62,12 +64,17 @@ class MetricsTracker:
         if stego_mask.any():
             pred_rate = predictions["payload_rate"][stego_mask] * 0.5
             true_rate = labels["payload_rate"][stego_mask]
-            self.payload_mse_sum += ((pred_rate - true_rate) ** 2).sum().item()
-            self.payload_count += stego_mask.sum().item()
+            # Filter NaN/Inf predictions to prevent poison accumulation
+            valid = ~(torch.isnan(pred_rate) | torch.isinf(pred_rate))
+            if valid.any():
+                self.payload_mse_sum += ((pred_rate[valid] - true_rate[valid]) ** 2).sum().item()
+                self.payload_count += valid.sum().item()
 
         for k, v in loss_dict.items():
             if k not in ("weights", "log_var"):
-                self.loss_sums[k] = self.loss_sums.get(k, 0.0) + v.item()
+                val = v.item()
+                if not (math.isnan(val) or math.isinf(val)):
+                    self.loss_sums[k] = self.loss_sums.get(k, 0.0) + val
         self.loss_counts += 1
 
     def compute(self) -> dict:
@@ -82,6 +89,11 @@ class MetricsTracker:
         if self._binary_probs:
             all_probs = torch.cat(self._binary_probs).numpy()
             all_labels = torch.cat(self._binary_labels).numpy()
+            # Filter NaN/Inf probs
+            valid_mask = np.isfinite(all_probs)
+            if valid_mask.sum() > 0:
+                all_probs = all_probs[valid_mask]
+                all_labels = all_labels[valid_mask]
             try:
                 metrics["auc_roc"] = roc_auc_score(all_labels, all_probs)
             except ValueError:
