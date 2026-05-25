@@ -246,6 +246,7 @@ def train_phase(
         output_dir=phase_out,
         resume_path=resume_path,
         writer=writer,
+        phase_resume=resume_path is not None,
     )
 
     if writer:

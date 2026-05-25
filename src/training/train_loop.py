@@ -309,6 +309,7 @@ def train(
     output_dir: str = "checkpoints",
     resume_path: str | None = None,
     writer=None,
+    phase_resume: bool = False,
 ):
     """Full training loop with hardened checkpointing.
 
@@ -369,14 +370,28 @@ def train(
 
     # Resume from checkpoint
     if resume_path and os.path.exists(resume_path):
-        ckpt = load_checkpoint(
-            resume_path, model, optimizer, scheduler, criterion,
-            map_location=str(device),
-        )
-        start_epoch = ckpt.get("epoch", 0)
-        global_step = ckpt.get("global_step", 0)
-        best_val_acc = ckpt.get("best_val_acc", 0.0)
-        print(f"Resumed from epoch {start_epoch}, step {global_step}, best_acc={best_val_acc:.4f}")
+        if phase_resume:
+            # Phased training: load model weights + optimizer momentum only.
+            # Skip scheduler (rebuilt fresh for new phase's step count).
+            # Reset epoch/step counters for the new phase.
+            ckpt = load_checkpoint(
+                resume_path, model, optimizer, None, criterion,
+                map_location=str(device),
+            )
+            best_val_acc = ckpt.get("best_val_acc", 0.0)
+            print(f"Phase resume: loaded weights, best_acc={best_val_acc:.4f}")
+            print(f"  Scheduler: fresh (not loaded from checkpoint)")
+            print(f"  start_epoch=0, global_step=0")
+        else:
+            # Normal resume: restore full training state
+            ckpt = load_checkpoint(
+                resume_path, model, optimizer, scheduler, criterion,
+                map_location=str(device),
+            )
+            start_epoch = ckpt.get("epoch", 0)
+            global_step = ckpt.get("global_step", 0)
+            best_val_acc = ckpt.get("best_val_acc", 0.0)
+            print(f"Resumed from epoch {start_epoch}, step {global_step}, best_acc={best_val_acc:.4f}")
         if "timestamp" in ckpt:
             print(f"  Checkpoint from: {ckpt['timestamp']}")
 
