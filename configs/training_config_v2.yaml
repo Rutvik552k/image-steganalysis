@@ -1,0 +1,51 @@
+# UniSteg Training Configuration — v2
+# Changes from v1:
+#   - max_grad_norm: 1.0 → 5.0 (stop killing gradients)
+#   - loss_mode: kendall → fixed (binary task dominates)
+#   - fixed_loss_weights: [1.0, 0.3, 0.1, 0.1]
+#   - patience: 15 → 20 (more time to converge)
+#   - NaN fix via autocast(enabled=False) in preprocessing/forensic_stream
+
+# Model
+model:
+  variant: "lite"
+  num_experts: 5
+  tlu_threshold: 3.0
+
+# Data
+data:
+  splits_dir: "data/splits"
+  batch_size: 32
+  target_size: 256
+  apply_srm: false
+  num_workers: 4
+  pin_memory: true
+
+# Training
+training:
+  lr: 1.0e-3
+  min_lr: 1.0e-6
+  weight_decay: 1.0e-4
+  epochs: 100
+  warmup_epochs: 5
+  accumulation_steps: 2         # effective batch = 32 * 2 = 64
+  max_grad_norm: 5.0            # v2: was 1.0, natural grads are 4-7
+  use_amp: true
+  patience: 20                  # v2: was 15
+  plateau_patience: 5
+
+  # v2: fixed loss weights — binary detection dominates
+  loss_mode: "fixed"
+  fixed_loss_weights: [1.0, 0.3, 0.1, 0.1]
+
+  # Checkpoint strategy
+  save_every: 5
+  save_every_steps: 500
+  keep_last_checkpoints: 3
+
+# Output
+output_dir: "checkpoints_v2"
+resume_path: null
+tensorboard: true
+log_dir: "runs_v2"
+seed: 42
