@@ -252,14 +252,18 @@ class StatisticalBranch(nn.Module):
         )
         self.out_dim = feat_dim
 
+    @torch.autocast(device_type="cuda", enabled=False)
     def _compute_moments(self, x: torch.Tensor) -> torch.Tensor:
         """Compute per-channel statistical moments.
+
+        Force float32 — pow(3)/pow(4) overflow in float16 under AMP.
 
         Args:
             x: (B, C, H, W)
         Returns:
             (B, C*4) — mean, variance, skewness, kurtosis per channel
         """
+        x = x.float()
         B, C = x.shape[:2]
         flat = x.reshape(B, C, -1)  # (B, C, H*W)
 

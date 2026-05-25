@@ -357,7 +357,11 @@ def train(
 
     model = model.to(device)
     # torch.compile disabled — CUDA graph capture uses too much VRAM on A6000 48GB
-    criterion = UniStegLoss().to(device)
+    loss_mode = config.get("loss_mode", "kendall")
+    fixed_weights = config.get("fixed_loss_weights", None)
+    if fixed_weights is not None:
+        fixed_weights = tuple(fixed_weights)
+    criterion = UniStegLoss(mode=loss_mode, fixed_weights=fixed_weights).to(device)
     optimizer = build_optimizer(model, lr, weight_decay)
     scheduler = build_scheduler(
         optimizer, warmup_epochs, epochs, len(train_loader), min_lr,

@@ -23,18 +23,33 @@ import torch.nn.functional as F
 
 
 class UniStegLoss(nn.Module):
-    """Multi-task loss with Kendall uncertainty weighting.
+    """Multi-task loss with Kendall uncertainty weighting or fixed weights.
 
-    Learns per-task log-variance (log_sigma^2) that automatically
-    balances task contributions. Includes regularization to prevent
-    weight collapse.
+    Two modes:
+      - "kendall": learns per-task log-variance (Kendall et al., CVPR 2018)
+      - "fixed": uses static weights (better when auxiliary tasks are noisy)
+
+    Default fixed weights prioritize binary detection (the primary task).
     """
 
-    def __init__(self, num_tasks: int = 4):
+    def __init__(
+        self,
+        num_tasks: int = 4,
+        mode: str = "kendall",
+        fixed_weights: tuple[float, ...] | None = None,
+    ):
         super().__init__()
+        self.mode = mode
 
-        # Learnable log(sigma^2) per task — initialized to 0 (sigma=1)
+        # Learnable log(sigma^2) per task — used in kendall mode
         self.log_var = nn.Parameter(torch.zeros(num_tasks))
+
+        # Fixed weights: (binary, algo_class, algorithm, payload)
+        if fixed_weights is None:
+            fixed_weights = (1.0, 0.3, 0.1, 0.1)
+        self.register_buffer(
+            "fixed_w", torch.tensor(fixed_weights, dtype=torch.float32)
+        )
 
         self.ce_loss = nn.CrossEntropyLoss()
         self.mse_loss = nn.MSELoss()
@@ -77,22 +92,23 @@ class UniStegLoss(nn.Module):
         else:
             loss_payload = torch.tensor(0.0, device=loss_binary.device)
 
-        # Kendall uncertainty weighting:
-        # L_total = sum_i [ (1 / (2 * exp(log_var_i))) * L_i + 0.5 * log_var_i ]
-        # The 0.5 * log_var term is the regularizer preventing weight collapse.
         losses = torch.stack([loss_binary, loss_algo_class, loss_algorithm, loss_payload])
 
-        # Force float32 for exp/precision — these overflow in float16 under AMP
-        log_var_clamped = self.log_var.float().clamp(-6.0, 6.0)
-        precision = torch.exp(-log_var_clamped)  # 1 / sigma^2
-        total_loss = (precision * losses.float() + log_var_clamped).sum() * 0.5
+        if self.mode == "kendall":
+            # Kendall uncertainty weighting:
+            # L_total = sum_i [ (1 / (2 * exp(log_var_i))) * L_i + 0.5 * log_var_i ]
+            log_var_clamped = self.log_var.float().clamp(-6.0, 6.0)
+            precision = torch.exp(-log_var_clamped)  # 1 / sigma^2
+            total_loss = (precision * losses.float() + log_var_clamped).sum() * 0.5
+            effective_weights = precision.detach()
+        else:
+            # Fixed weights — binary task dominates
+            total_loss = (self.fixed_w * losses.float()).sum()
+            effective_weights = self.fixed_w.detach()
 
         # NaN guard
         if torch.isnan(total_loss) or torch.isinf(total_loss):
             total_loss = loss_binary + loss_algo_class + loss_algorithm + loss_payload
-
-        # Effective weights for logging (higher precision = higher weight)
-        effective_weights = precision.detach()
 
         loss_dict = {
             "binary": loss_binary.detach(),

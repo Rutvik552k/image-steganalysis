@@ -121,8 +121,11 @@ class LocalEntropyMap(nn.Module):
         # Bandwidth for Gaussian kernel binning
         self.bandwidth = 6.0 / num_bins  # adaptive to bin spacing
 
+    @torch.autocast(device_type="cuda", enabled=False)
     def _soft_entropy(self, x: torch.Tensor, window: int) -> torch.Tensor:
         """Compute local entropy using average-pooled soft histograms.
+
+        Force float32 — exp()/log2() overflow in float16 under AMP.
 
         Args:
             x: (B, C, H, W) residuals
@@ -131,6 +134,7 @@ class LocalEntropyMap(nn.Module):
         Returns:
             (B, 1, H, W) entropy map (same spatial size via padding)
         """
+        x = x.float()
         B, C, H, W = x.shape
         # Average over channels to get single residual map
         x_avg = x.mean(dim=1, keepdim=True)  # (B, 1, H, W)
