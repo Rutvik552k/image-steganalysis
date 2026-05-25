@@ -165,6 +165,8 @@ def train_one_epoch(
     output_dir: str = "checkpoints",
     best_val_acc: float = 0.0,
     config: dict | None = None,
+    writer=None,
+    log_every_n_steps: int = 50,
 ) -> tuple[dict, int, list[float]]:
     """Train for one epoch.
 
@@ -174,11 +176,18 @@ def train_one_epoch(
     tracker = MetricsTracker()
     grad_norms = []
 
+    use_amp = config.get("use_amp", True) if config else True
+
     for step, batch in enumerate(loader):
         images = batch["image"].to(device, non_blocking=True)
         labels = {k: v.to(device, non_blocking=True) for k, v in batch["labels"].items()}
 
-        with torch.autocast(device_type=device.type):
+        if use_amp:
+            with torch.autocast(device_type=device.type):
+                predictions = model(images)
+                loss, loss_dict = criterion(predictions, labels)
+                loss = loss / accumulation_steps
+        else:
             predictions = model(images)
             loss, loss_dict = criterion(predictions, labels)
             loss = loss / accumulation_steps
@@ -188,19 +197,40 @@ def train_one_epoch(
             optimizer.zero_grad(set_to_none=True)
             continue
 
-        scaler.scale(loss).backward()
+        if use_amp:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
         if (step + 1) % accumulation_steps == 0:
-            scaler.unscale_(optimizer)
+            if use_amp:
+                scaler.unscale_(optimizer)
             gn = compute_grad_norm(model)
             grad_norms.append(gn)
             nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-            scaler.step(optimizer)
-            scaler.update()
+            if use_amp:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             project_bayar_weights(model)
             scheduler.step()
             global_step += 1
+
+            # Step-level TensorBoard logging
+            if writer and log_every_n_steps > 0 and global_step % log_every_n_steps == 0:
+                writer.add_scalar("step/train_loss", loss_dict["total"].item(), global_step)
+                writer.add_scalar("step/grad_norm", gn, global_step)
+                writer.add_scalar("step/lr", optimizer.param_groups[0]["lr"], global_step)
+
+            # Step-level console progress
+            if global_step % 500 == 0:
+                print(
+                    f"  [step {global_step}] batch {step+1}/{len(loader)} "
+                    f"loss={loss_dict['total'].item():.4f} grad={gn:.2f} "
+                    f"lr={optimizer.param_groups[0]['lr']:.2e}"
+                )
 
             # Intra-epoch step checkpoint
             if save_every_n_steps > 0 and global_step % save_every_n_steps == 0:
@@ -225,6 +255,7 @@ def validate(
     loader: DataLoader,
     criterion: UniStegLoss,
     device: torch.device,
+    use_amp: bool = True,
 ) -> dict:
     """Validate. Returns metrics dict."""
     model.train(False)
@@ -234,7 +265,11 @@ def validate(
         images = batch["image"].to(device, non_blocking=True)
         labels = {k: v.to(device, non_blocking=True) for k, v in batch["labels"].items()}
 
-        with torch.autocast(device_type=device.type):
+        if use_amp:
+            with torch.autocast(device_type=device.type):
+                predictions = model(images)
+                _, loss_dict = criterion(predictions, labels)
+        else:
             predictions = model(images)
             _, loss_dict = criterion(predictions, labels)
 
@@ -253,7 +288,7 @@ def validate(
 
 def format_metrics(metrics: dict, prefix: str = "") -> str:
     parts = []
-    for k in ["binary_acc", "auc_roc", "algo_class_acc", "algo_acc", "payload_rmse", "loss/total"]:
+    for k in ["balanced_acc", "f1", "min_p_e", "p_e", "auc_roc", "algo_class_acc", "algo_acc", "macro_f1", "payload_rmse", "loss/total"]:
         if k in metrics:
             v = metrics[k]
             label = k.replace("loss/", "L_")
@@ -294,7 +329,7 @@ def train(
 
     # --- GPU performance optimizations ---
     if device.type == "cuda":
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = False
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
@@ -311,9 +346,10 @@ def train(
     keep_last_checkpoints = config.get("keep_last_checkpoints", 3)
     min_lr = config.get("min_lr", 1e-6)
     plateau_patience = config.get("plateau_patience", 5)
+    use_amp = config.get("use_amp", True)
 
-    model = model.to(device, memory_format=torch.channels_last)
-    model = torch.compile(model, mode="reduce-overhead")
+    model = model.to(device)
+    # torch.compile disabled — CUDA graph capture uses too much VRAM on A6000 48GB
     criterion = UniStegLoss().to(device)
     optimizer = build_optimizer(model, lr, weight_decay)
     scheduler = build_scheduler(
@@ -376,10 +412,10 @@ def train(
     if save_every_steps > 0:
         print(f"  Step checkpoint: every {save_every_steps} steps")
     print(f"  Device: {device}")
-    print(f"  AMP: enabled")
+    print(f"  AMP: {'enabled' if use_amp else 'disabled'}")
     if device.type == "cuda":
-        print(f"  TF32: enabled | cuDNN benchmark: enabled | channels_last: enabled")
-        print(f"  torch.compile: reduce-overhead")
+        print(f"  TF32: enabled | cuDNN benchmark: disabled | channels_last: disabled")
+        print(f"  torch.compile: disabled (VRAM constraint)")
     print()
 
     # Training history for plotting
@@ -387,10 +423,14 @@ def train(
         "epochs": [],
         "train_loss": [],
         "val_loss": [],
-        "train_binary_acc": [],
-        "val_binary_acc": [],
+        "train_balanced_acc": [],
+        "val_balanced_acc": [],
+        "val_p_e": [],
+        "val_min_p_e": [],
+        "val_f1": [],
         "val_auc_roc": [],
         "val_algo_class_acc": [],
+        "val_macro_f1": [],
         "val_payload_rmse": [],
         "lr": [],
         "grad_norm_avg": [],
@@ -408,10 +448,11 @@ def train(
             epoch=epoch, global_step=global_step,
             save_every_n_steps=save_every_steps,
             output_dir=output_dir, best_val_acc=best_val_acc, config=config,
+            writer=writer,
         )
 
         # Validate
-        val_metrics = validate(model, val_loader, criterion, device)
+        val_metrics = validate(model, val_loader, criterion, device, use_amp=use_amp)
 
         elapsed = time.time() - t0
         lr_current = optimizer.param_groups[0]["lr"]
@@ -438,23 +479,31 @@ def train(
         history["epochs"].append(epoch + 1)
         history["train_loss"].append(train_metrics.get("loss/total", 0.0))
         history["val_loss"].append(val_metrics.get("loss/total", 0.0))
-        history["train_binary_acc"].append(train_metrics.get("binary_acc", 0.0))
-        history["val_binary_acc"].append(val_metrics.get("binary_acc", 0.0))
+        history["train_balanced_acc"].append(train_metrics.get("balanced_acc", 0.0))
+        history["val_balanced_acc"].append(val_metrics.get("balanced_acc", 0.0))
+        history["val_p_e"].append(val_metrics.get("p_e", 0.5))
+        history["val_min_p_e"].append(val_metrics.get("min_p_e", 0.5))
+        history["val_f1"].append(val_metrics.get("f1", 0.0))
         history["val_auc_roc"].append(val_metrics.get("auc_roc", 0.0))
         history["val_algo_class_acc"].append(val_metrics.get("algo_class_acc", 0.0))
+        history["val_macro_f1"].append(val_metrics.get("macro_f1", 0.0))
         history["val_payload_rmse"].append(val_metrics.get("payload_rmse", 0.0))
         history["lr"].append(lr_current)
         history["grad_norm_avg"].append(avg_grad_norm)
 
         if writer:
+            # Log epoch-level metrics using global_step as x-axis
+            skip_keys = {"per_algo_acc", "confusion_matrix"}
             for k, v in train_metrics.items():
-                writer.add_scalar(f"train/{k}", v, epoch)
+                if k not in skip_keys and isinstance(v, (int, float)):
+                    writer.add_scalar(f"epoch/train/{k}", v, global_step)
             for k, v in val_metrics.items():
-                writer.add_scalar(f"val/{k}", v, epoch)
-            writer.add_scalar("lr", lr_current, epoch)
-            writer.add_scalar("grad/avg_norm", avg_grad_norm, epoch)
-            writer.add_scalar("grad/max_norm", max_grad_norm_val, epoch)
-            writer.add_scalar("step", global_step, epoch)
+                if k not in skip_keys and isinstance(v, (int, float)):
+                    writer.add_scalar(f"epoch/val/{k}", v, global_step)
+            writer.add_scalar("epoch/lr", lr_current, global_step)
+            writer.add_scalar("epoch/grad_avg_norm", avg_grad_norm, global_step)
+            writer.add_scalar("epoch/grad_max_norm", max_grad_norm_val, global_step)
+            writer.flush()
 
         # Always save last.pt (crash recovery)
         save_checkpoint(
@@ -463,8 +512,8 @@ def train(
             global_step=global_step, best_val_acc=best_val_acc, config=config,
         )
 
-        # Best model checkpoint
-        val_acc = val_metrics.get("binary_acc", 0.0)
+        # Best model checkpoint (use balanced_acc — immune to class imbalance)
+        val_acc = val_metrics.get("balanced_acc", 0.0)
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             epochs_without_improvement = 0
@@ -473,7 +522,7 @@ def train(
                 val_metrics, os.path.join(output_dir, "best.pt"),
                 global_step=global_step, best_val_acc=best_val_acc, config=config,
             )
-            print(f"  ** New best: binary_acc={val_acc:.4f}")
+            print(f"  ** New best: balanced_acc={val_acc:.4f} P_E={val_metrics.get('p_e', 0):.4f}")
         else:
             epochs_without_improvement += 1
 
@@ -505,6 +554,6 @@ def train(
         json.dump(history, f, indent=2)
     print(f"\nTraining log saved to {history_path}")
 
-    print(f"Training complete. Best binary_acc: {best_val_acc:.4f}")
+    print(f"Training complete. Best balanced_acc: {best_val_acc:.4f}")
     print(f"Checkpoints in {output_dir}/: best.pt, last.pt")
     return best_val_acc
