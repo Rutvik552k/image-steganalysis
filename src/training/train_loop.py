@@ -287,13 +287,19 @@ def validate(
 # ============================================================
 
 def format_metrics(metrics: dict, prefix: str = "") -> str:
-    parts = []
-    for k in ["balanced_acc", "f1", "min_p_e", "p_e", "auc_roc", "algo_class_acc", "algo_acc", "macro_f1", "payload_rmse", "loss/total"]:
-        if k in metrics:
-            v = metrics[k]
-            label = k.replace("loss/", "L_")
-            parts.append(f"{label}={v:.4f}")
-    return f"{prefix} " + " | ".join(parts)
+    line1_keys = ["balanced_acc", "f1", "min_p_e", "p_e", "auc_roc"]
+    line2_keys = ["algo_class_acc", "algo_acc", "macro_f1", "payload_rmse", "loss/total"]
+
+    def _fmt(keys):
+        parts = []
+        for k in keys:
+            if k in metrics:
+                v = metrics[k]
+                label = k.replace("loss/", "L_")
+                parts.append(f"{label}={v:.4f}")
+        return " | ".join(parts)
+
+    return f"{prefix} {_fmt(line1_keys)}\n{' ' * len(prefix)} {_fmt(line2_keys)}"
 
 
 # ============================================================
