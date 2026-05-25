@@ -122,7 +122,9 @@ def process_one_cover(args):
                 elif algo == "mipod":
                     stego = cl.mipod.simulate_single_channel(x0=cover, alpha=rate, seed=seed)
                 elif algo == "lsb_matching":
-                    stego = cl.lsb.simulate(x0=cover, alpha=rate, seed=seed)
+                    stego = cl.lsb.simulate(cover=cover, alpha=rate, modify=cl.lsb.Change.LSB_MATCHING, seed=seed)
+                elif algo == "lsb_replacement":
+                    stego = cl.lsb.simulate(cover=cover, alpha=rate, modify=cl.lsb.Change.LSB_REPLACEMENT, seed=seed)
                 else:
                     continue
 

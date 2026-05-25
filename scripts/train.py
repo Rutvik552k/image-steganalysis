@@ -95,6 +95,16 @@ def main():
         print(f"  GPU: {torch.cuda.get_device_name(0)}")
         print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
+    # Read label maps to get actual class counts
+    import json as _json
+    splits_dir = data_cfg.get("splits_dir", "data/splits")
+    label_maps_path = Path(splits_dir) / "label_maps.json"
+    with open(label_maps_path) as f:
+        label_maps = _json.load(f)
+    num_algo_classes = len(label_maps.get("algorithm_class", {}))
+    num_algorithms = len(label_maps.get("algorithm", {}))
+    print(f"Label maps: {num_algo_classes} algo classes, {num_algorithms} algorithms")
+
     # Model
     variant = model_cfg.get("variant", "lite")
     if variant == "full":
@@ -103,16 +113,16 @@ def main():
             dino_model=model_cfg.get("dino_model", "dinov2_vits14"),
             lora_rank=model_cfg.get("lora_rank", 8),
             num_experts=model_cfg.get("num_experts", 5),
-            num_algo_classes=model_cfg.get("num_algo_classes", 7),
-            num_algorithms=model_cfg.get("num_algorithms", 21),
+            num_algo_classes=num_algo_classes,
+            num_algorithms=num_algorithms,
             tlu_threshold=model_cfg.get("tlu_threshold", 3.0),
         )
         print(f"Model: UniSteg (full, with DINOv2)")
     else:
         model = UniStegLite(
             num_experts=model_cfg.get("num_experts", 5),
-            num_algo_classes=model_cfg.get("num_algo_classes", 7),
-            num_algorithms=model_cfg.get("num_algorithms", 21),
+            num_algo_classes=num_algo_classes,
+            num_algorithms=num_algorithms,
         )
         print(f"Model: UniStegLite (no DINOv2)")
 

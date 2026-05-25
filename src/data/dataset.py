@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 
 # ============================================================
@@ -452,13 +452,18 @@ def create_dataloaders(
     """
     label_maps_path = os.path.join(splits_dir, "label_maps.json")
 
+    train_csv = os.path.join(splits_dir, "train.csv")
+    train_count = sum(1 for _ in open(train_csv)) - 1  # minus header
+    # Preload only if dataset fits in ~14GB (under 220K images at 256x256)
+    use_preload = train_count <= 220000
+
     train_ds = SteganalysisDataset(
-        csv_path=os.path.join(splits_dir, "train.csv"),
+        csv_path=train_csv,
         label_maps_path=label_maps_path,
         target_size=target_size,
         apply_srm=apply_srm,
         augment=True,  # D4 group augmentation during training
-        preload=True,  # load all train images into RAM (~16 GB)
+        preload=use_preload,
     )
 
     val_ds = SteganalysisDataset(
@@ -477,10 +482,22 @@ def create_dataloaders(
         augment=False,
     )
 
+    # Balanced sampler: equal cover/stego per batch
+    # Without this, 78% stego ratio causes model to predict majority class
+    binary_labels = train_ds.df["is_stego"].values
+    class_counts = np.bincount(binary_labels)
+    class_weights = 1.0 / class_counts
+    sample_weights = class_weights[binary_labels]
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(train_ds),
+        replacement=True,
+    )
+
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
-        shuffle=True,
+        sampler=sampler,  # balanced sampling instead of shuffle
         num_workers=num_workers,
         pin_memory=pin_memory,
         drop_last=True,

@@ -29,6 +29,7 @@ training:
   warmup_epochs: 5
   accumulation_steps: 2       # effective batch = 48 * 2 = 96
   max_grad_norm: 1.0
+  use_amp: true               # enabled — works after fixing channels_last + cudnn.benchmark
   patience: 15                # early stopping patience (epochs)
   plateau_patience: 5         # LR reduction patience (epochs)
 
