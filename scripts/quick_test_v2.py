@@ -41,8 +41,8 @@ def set_seed(seed: int = 42):
 def create_test_splits(splits_dir: str, out_dir: str, n_train: int = 500, n_val: int = 150):
     """Sample small splits for quick testing."""
     os.makedirs(out_dir, exist_ok=True)
-    for name, n in [("train", n_train), ("val", n_val)]:
-        df = pd.read_csv(os.path.join(splits_dir, f"{name}.csv"))
+    for name, n in [("train", n_train), ("val", n_val), ("test", n_val)]:
+        df = pd.read_csv(os.path.join(splits_dir, f"{name}.csv"), low_memory=False)
         sampled = df.sample(n=min(n, len(df)), random_state=42)
         sampled.to_csv(os.path.join(out_dir, f"{name}.csv"), index=False)
         print(f"  {name}: {len(sampled)} samples")
